@@ -1,35 +1,8 @@
 import logging
-from custom_components.nvenergy.thesimple import (
-    TheSimpleClient,
-    TheSimpleThermostat,
-    TheSimpleError,
-)
-
-from homeassistant.components.climate import (
-    ClimateEntity,
-    ClimateEntityFeature,
-    HVACAction,
-    HVACMode,
-)
-
-from homeassistant.components.climate.const import (
-    FAN_AUTO,
-    FAN_ON,
-    PRESET_AWAY,
-    PRESET_NONE,
-)
-
-from homeassistant.const import (
-    ATTR_TEMPERATURE,
-    CONF_PASSWORD,
-    CONF_USERNAME,
-    CONF_NAME,
-    UnitOfTemperature,
-)
 
 _LOGGER = logging.getLogger(__name__)
 
-BASE_URL = "https://nve.ecofactor.com/ws/v1.0/"
+from .const import *
 
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
@@ -86,19 +59,14 @@ class NVEThermostat(ClimateEntity):
     def extra_state_attributes(self):
         data = {
             "setpoint_reason": self._thermostat.setpoint_reason,
-            "nve_thermostat_id": self._thermostat.id,
+            "nve_thermostat_id": self._thermostat.thermostat_id,
         }
         return data
 
     @property
     def fan_mode(self):
-        if self._thermostat.fan_mode == "on":
-            return FAN_ON
-        elif self._thermostat.fan_mode == "auto":
-            return FAN_AUTO
-        else:
-            return None
-    
+        return self._thermostat.fan_mode
+
     @property
     def fan_modes(self):
         return [FAN_ON, FAN_AUTO]
@@ -108,7 +76,7 @@ class NVEThermostat(ClimateEntity):
         simpletherm_state = self._thermostat.hvacState
         simpletherm_mode = self._thermostat.hvacMode
 
-        if simpletherm_mode == "off" and simpletherm_state == "off":
+        if simpletherm_mode == HVACMode.OFF and simpletherm_state == "off":
             return HVACAction.OFF
         if simpletherm_state == "cool":
             return HVACAction.COOLING
@@ -121,18 +89,19 @@ class NVEThermostat(ClimateEntity):
 
     @property
     def hvac_mode(self):
-        if self._thermostat.hvacMode == "cool":
-            return HVACMode.COOL
-        elif self._thermostat.hvacMode == "heat":
-            return HVACMode.HEAT
-        elif self._thermostat.hvacMode == "off":
-            return HVACMode.OFF
-        else:
-            return None
+        return self._thermostat.hvacMode
 
     @property
     def hvac_modes(self):
         return [HVACMode.COOL, HVACMode.HEAT, HVACMode.OFF]
+
+    @property
+    def preset_modes(self):
+        return [PRESET_AWAY, PRESET_NONE]
+
+    @property
+    def preset_mode(self):
+        return self._thermostat.preset_mode
 
     @property
     def max_temp(self):
@@ -155,7 +124,7 @@ class NVEThermostat(ClimateEntity):
 
     @property
     def supported_features(self):
-        return ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.FAN_MODE | ClimateEntityFeature.TURN_OFF | ClimateEntityFeature.TURN_ON
+        return ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.FAN_MODE | ClimateEntityFeature.TURN_OFF | ClimateEntityFeature.TURN_ON | ClimateEntityFeature.PRESET_MODE
 
     @property
     def target_temperature(self):
@@ -168,30 +137,16 @@ class NVEThermostat(ClimateEntity):
     @property
     def temperature_unit(self):
         return UnitOfTemperature.FAHRENHEIT
-    
+
     @property
     def unique_id(self):
         return self._thermostat.thermostat_id
 
     async def async_set_hvac_mode(self, hvac_mode: str):
-        simpletherm_mode = ""
-
-        if hvac_mode == HVACMode.COOL:
-            simpletherm_mode = "cool"
-        elif hvac_mode == HVACMode.HEAT:
-            simpletherm_mode = "heat"
-        elif hvac_mode == HVACMode.OFF:
-            simpletherm_mode = "off"
-        else:
-            raise NVEThermostatError("Unsupported HVAC mode: %s", hvac_mode)
-
-        await self.hass.async_add_executor_job(self._thermostat.set_mode, simpletherm_mode)
+        await self.hass.async_add_executor_job(self._thermostat.set_mode, hvac_mode)
 
     async def async_set_fan_mode(self, fan_mode):
-        if fan_mode == FAN_AUTO:
-            await self.hass.async_add_executor_job(self._thermostat.set_fan_mode, 'auto')
-        elif fan_mode == FAN_ON:
-            await self.hass.async_add_executor_job(self._thermostat.set_fan_mode, 'on')
+        await self.hass.async_add_executor_job(self._thermostat.set_fan_mode, fan_mode)
 
     async def async_set_temperature(self, **kwargs):
         _LOGGER.debug("Setting temperature")
@@ -201,6 +156,9 @@ class NVEThermostat(ClimateEntity):
 
         _LOGGER.debug("Setting current temp to %f", temperature)
         await self.hass.async_add_executor_job(self._thermostat.set_temp, temperature)
+
+    async def async_set_preset_mode(self, preset_mode):
+        await self.hass.async_add_executor_job(self._thermostat.set_preset_mode, preset_mode)
 
     async def async_update(self):
         _LOGGER.debug("Refreshing thermostat")
@@ -212,11 +170,11 @@ class NVEThermostat(ClimateEntity):
                 success = True
                 break
             except Exception as ex:
-                _LOGGER.warn("Refresh exception: %s", str(ex))
+                _LOGGER.warn(f"Refresh exception: {str(ex)}")
                 _LOGGER.debug("Attempting refresh token")
                 await self.hass.async_add_executor_job(self._thermostat.client.getToken)
 
             retries -= 1
 
-        if success == False:
+        if not success:
             raise NVEThermostatError("Refresh failed after three attempts.")
